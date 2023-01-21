@@ -35,17 +35,21 @@ func main() {
 		fmt.Println()
 		flag.PrintDefaults()
 	}
-	var fileFilters stringArgs
-	var pathFilters stringArgs
 	var flagDebug bool
 	flag.BoolVar(&flagDebug, "v", false, "verbose debug mode")
+	var fileFilters stringArgs
 	flag.Var(&fileFilters, "f", "file filters")
+	var pathFilters stringArgs
 	flag.Var(&pathFilters, "p", "path filters")
+	var fileNegFilters stringArgs
+	flag.Var(&fileNegFilters, "nf", "file negative filters")
+	var pathNegFilters stringArgs
+	flag.Var(&pathNegFilters, "np", "path negative filters")
 	flag.Parse()
 
 	log.Debug = flagDebug
 
-	s, err := newSearchFromArgs(flag.Args(), fileFilters, pathFilters)
+	s, err := newSearchFromArgs(flag.Args(), fileFilters, fileNegFilters, pathFilters, pathNegFilters)
 	if err != nil {
 		log.Fatalf("Error: %s", err)
 	}
@@ -61,30 +65,43 @@ func main() {
 }
 
 type search struct {
-	startPaths         []string
-	fileSearchPatterns []dotSearchPattern
-	pathSearchPatterns []dotSearchPattern
+	startPaths   []string
+	fileMatchers []matcher
+	pathMatchers []matcher
 }
 
 type searchResult string
 
-func newSearchFromArgs(paths, fileFilters, pathFilters []string) (search, error) {
+func newSearchFromArgs(paths, fileFilters, fileNegFilters, pathFilters, pathNegFilters []string) (search, error) {
 	s := search{}
 	for _, fileFilterString := range fileFilters {
-		pat, err := dotSearchPatternFromString(fileFilterString, true)
+		pat, err := newRegexDotMatcher(fileFilterString)
 		if err != nil {
 			return s, err
 		}
-		s.fileSearchPatterns = append(s.fileSearchPatterns, pat)
+		s.fileMatchers = append(s.fileMatchers, pat)
+	}
+	for _, fileNegFilterString := range fileNegFilters {
+		pat, err := newRegexDotMatcher(fileNegFilterString)
+		if err != nil {
+			return s, err
+		}
+		s.fileMatchers = append(s.fileMatchers, pat.negative())
 	}
 	for _, pathFilterString := range pathFilters {
-		pat, err := dotSearchPatternFromString(pathFilterString, true)
+		pat, err := newRegexDotMatcher(pathFilterString)
 		if err != nil {
 			return s, err
 		}
-		s.pathSearchPatterns = append(s.pathSearchPatterns, pat)
+		s.pathMatchers = append(s.pathMatchers, pat)
 	}
-
+	for _, pathNegFilterString := range pathNegFilters {
+		pat, err := newRegexDotMatcher(pathNegFilterString)
+		if err != nil {
+			return s, err
+		}
+		s.pathMatchers = append(s.pathMatchers, pat.negative())
+	}
 	s.startPaths = append(s.startPaths, paths...)
 	if len(s.startPaths) == 0 {
 		s.startPaths = append(s.startPaths, ".")
@@ -125,9 +142,9 @@ func (s search) pathMatchesPatterns(path_ string, info fs.FileInfo) bool {
 	pathLower := strings.ToLower(path_)
 
 	// path must match all the path search patterns
-	for _, pat := range s.pathSearchPatterns {
-		log.Debugf("check %s on %s", pat.re, pathLower)
-		if !pat.re.MatchString(pathLower) {
+	for _, pat := range s.pathMatchers {
+		log.Debugf("check %s on %s", pat, pathLower)
+		if !pat.match(pathLower) {
 			log.Debugf("skip path %s because does not match %s", path_, pat)
 			return false
 		}
@@ -140,8 +157,8 @@ func (s search) pathMatchesPatterns(path_ string, info fs.FileInfo) bool {
 
 	filename := path.Base(pathLower)
 	// file name should match all the file search patterns
-	for _, pat := range s.fileSearchPatterns {
-		if !pat.re.MatchString(filename) {
+	for _, pat := range s.fileMatchers {
+		if !pat.match(filename) {
 			log.Debugf("skip file %s because does not match %s", filename, pat)
 			return false
 		}
@@ -151,28 +168,50 @@ func (s search) pathMatchesPatterns(path_ string, info fs.FileInfo) bool {
 }
 
 func (s search) String() string {
-	return fmt.Sprintf("dirs: %+v, files: %+v, paths: %+v", s.startPaths, s.fileSearchPatterns, s.pathSearchPatterns)
+	return fmt.Sprintf("dirs: %+v, files: %+v, paths: %+v", s.startPaths, s.fileMatchers, s.pathMatchers)
 }
 
-type dotSearchPattern struct {
+type matcher interface {
+	match(s string) bool
+}
+
+type regexDotMatcher struct {
 	original string
 	re       *regexp.Regexp
 }
 
-func dotSearchPatternFromString(s string, matchWholeContent bool) (dotSearchPattern, error) {
+func newRegexDotMatcher(s string) (regexDotMatcher, error) {
 	parts := strings.Split(s, "..")
 	quoted := []string{}
 	for _, part := range parts {
 		quoted = append(quoted, regexp.QuoteMeta(part))
 	}
 	fullPattern := strings.Join(quoted, ".*?")
-	if matchWholeContent {
-		fullPattern = "^" + fullPattern + "$"
-	}
+	fullPattern = "^" + fullPattern + "$"
 	re, err := regexp.Compile(fullPattern)
-	return dotSearchPattern{original: s, re: re}, err
+	return regexDotMatcher{original: s, re: re}, err
 }
 
-func (pat dotSearchPattern) String() string {
-	return fmt.Sprintf("%s /%s/", pat.original, pat.re)
+func (mat regexDotMatcher) String() string {
+	return fmt.Sprintf("%s /%s/", mat.original, mat.re)
+}
+
+func (mat regexDotMatcher) match(s string) bool {
+	return mat.re.MatchString(s)
+}
+
+func (mat regexDotMatcher) negative() negRegexDotMatcher {
+	return negRegexDotMatcher{original: mat}
+}
+
+type negRegexDotMatcher struct {
+	original regexDotMatcher
+}
+
+func (mat negRegexDotMatcher) String() string {
+	return fmt.Sprintf("not(%s)", mat.original)
+}
+
+func (mat negRegexDotMatcher) match(s string) bool {
+	return !mat.original.match(s)
 }
