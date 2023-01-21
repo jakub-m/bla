@@ -9,13 +9,14 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/BurntSushi/toml"
 )
 
 var log = betterlog{}
+var tomlPaths = []string{".bla.toml", "bla.toml", "~/.bla.toml"}
 
-const helpString = `
-Yet another file search tool. An equivalent of "find ... | egrep ..."
-`
+const helpString = `Yet another file search tool. An equivalent of "find ... | egrep ..."`
 
 type stringArgs []string
 
@@ -28,6 +29,11 @@ func (a *stringArgs) String() string {
 	return fmt.Sprint(*a)
 }
 
+type tomlConfig struct {
+	NegFileFilters []string `toml:"not_files"`
+	NegPathFilters []string `toml:"not_paths"`
+}
+
 func main() {
 	flag.CommandLine.SetOutput(os.Stdout)
 	flag.Usage = func() {
@@ -36,18 +42,30 @@ func main() {
 		flag.PrintDefaults()
 	}
 	var flagDebug bool
-	flag.BoolVar(&flagDebug, "v", false, "verbose debug mode")
+	flag.BoolVar(&flagDebug, "v", false, "Verbose debug mode.")
 	var fileFilters stringArgs
-	flag.Var(&fileFilters, "f", "file filters")
+	flag.Var(&fileFilters, "f", "File filters.")
 	var pathFilters stringArgs
-	flag.Var(&pathFilters, "p", "path filters")
+	flag.Var(&pathFilters, "p", "Path filters.")
 	var fileNegFilters stringArgs
-	flag.Var(&fileNegFilters, "nf", "file negative filters")
+	flag.Var(&fileNegFilters, "nf", "File negative filters.")
 	var pathNegFilters stringArgs
-	flag.Var(&pathNegFilters, "np", "path negative filters")
+	flag.Var(&pathNegFilters, "np", "Path negative filters.")
+	var configPath string
+	flag.StringVar(&configPath, "c", "", "Path to toml config file. If empty, default locations are checked.")
 	flag.Parse()
 
 	log.Debug = flagDebug
+
+	var config tomlConfig
+	if configPath == "" {
+		config = loadFirstTomlConfig(tomlPaths...)
+	} else {
+		config = loadFirstTomlConfig(configPath)
+	}
+	log.Debugf("config: %s", config)
+	fileNegFilters = append(fileNegFilters, config.NegFileFilters...)
+	pathNegFilters = append(pathNegFilters, config.NegPathFilters...)
 
 	s, err := newSearchFromArgs(flag.Args(), fileFilters, fileNegFilters, pathFilters, pathNegFilters)
 	if err != nil {
@@ -62,6 +80,20 @@ func main() {
 		fmt.Println(path)
 	}
 	s.execute(onResult)
+}
+
+func loadFirstTomlConfig(paths ...string) tomlConfig {
+	for _, path := range paths {
+		log.Debugf("toml file: %s", path)
+		var tomlConfig tomlConfig
+		if _, err := toml.DecodeFile(path, &tomlConfig); err == nil {
+			return tomlConfig
+		} else {
+			log.Debugf("%s: %s", path, err)
+		}
+	}
+	// return empty config, it's ok
+	return tomlConfig{}
 }
 
 type search struct {
