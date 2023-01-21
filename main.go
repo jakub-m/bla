@@ -16,7 +16,13 @@ import (
 var log = betterlog{}
 var tomlPaths = []string{".bla.toml", "bla.toml", "~/.bla.toml"}
 
-const helpString = `Yet another file search tool. An equivalent of "find ... | egrep ..."`
+const helpString = `
+Yet another file search tool. An equivalent of "find ... | egrep ...". The patterns are defined as lower-case literals and two dots "..", like:
+
+    ..foo..    is  /.*foo.*/
+    bar..      is /bar.*/
+    ..foo..bar is /.*foo.*bar/
+`
 
 type stringArgs []string
 
@@ -30,6 +36,8 @@ func (a *stringArgs) String() string {
 }
 
 type tomlConfig struct {
+	FileFilters    []string `toml:"files"`
+	PathFilters    []string `toml:"paths"`
 	NegFileFilters []string `toml:"not_files"`
 	NegPathFilters []string `toml:"not_paths"`
 }
@@ -64,6 +72,8 @@ func main() {
 		config = loadFirstTomlConfig(configPath)
 	}
 	log.Debugf("config: %s", config)
+	fileFilters = append(fileFilters, config.FileFilters...)
+	pathFilters = append(pathFilters, config.PathFilters...)
 	fileNegFilters = append(fileNegFilters, config.NegFileFilters...)
 	pathNegFilters = append(pathNegFilters, config.NegPathFilters...)
 

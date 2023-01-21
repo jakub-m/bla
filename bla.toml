@@ -1,0 +1,14 @@
+files = [
+]
+
+paths = [
+]
+
+not_files = [
+]
+
+not_paths = [
+    ".git/..",
+    "bin/.."
+]
+
