@@ -14,8 +14,7 @@ import (
 )
 
 var log = betterlog{}
-var tomlPaths = []string{".bla.toml", "bla.toml", "~/.bla.toml"}
-var helpString = fmt.Sprintf(`
+var helpString = `
 Yet another file search tool. An equivalent of "find ... | egrep ...". The patterns
 are defined as lower-case literals and two dots "..", like:
 
@@ -24,8 +23,8 @@ are defined as lower-case literals and two dots "..", like:
     ..foo..bar is /.*foo.*bar/
 
 Supports toml files with configurations, either passed explicitly or in default
-locations: %s
-`, tomlPaths)
+locations: bla.toml, .bla.toml, ~/.bla.toml
+`
 
 type stringArgs []string
 
@@ -37,14 +36,6 @@ func (a *stringArgs) Set(value string) error {
 func (a *stringArgs) String() string {
 	return fmt.Sprint(*a)
 }
-
-type tomlConfig struct {
-	FileFilters    []string `toml:"files"`
-	PathFilters    []string `toml:"paths"`
-	NegFileFilters []string `toml:"not_files"`
-	NegPathFilters []string `toml:"not_paths"`
-}
-
 func main() {
 	flag.CommandLine.SetOutput(os.Stdout)
 	flag.Usage = func() {
@@ -70,9 +61,13 @@ func main() {
 
 	var config tomlConfig
 	if configPath == "" {
-		config = loadFirstTomlConfig(tomlPaths...)
+		paths := []string{".bla.toml", "bla.toml"}
+		if home := os.Getenv("HOME"); home != "" {
+			paths = append(paths, home+"/.bla.toml")
+		}
+		config = loadTomlConfigs(paths...)
 	} else {
-		config = loadFirstTomlConfig(configPath)
+		config = loadTomlConfigs(configPath)
 	}
 	log.Debugf("config: %s", config)
 	fileFilters = append(fileFilters, config.FileFilters...)
@@ -95,18 +90,32 @@ func main() {
 	s.execute(onResult)
 }
 
-func loadFirstTomlConfig(paths ...string) tomlConfig {
+type tomlConfig struct {
+	FileFilters    []string `toml:"files"`
+	PathFilters    []string `toml:"paths"`
+	NegFileFilters []string `toml:"not_files"`
+	NegPathFilters []string `toml:"not_paths"`
+}
+
+func loadTomlConfigs(paths ...string) tomlConfig {
+	var config tomlConfig
 	for _, path := range paths {
-		log.Debugf("toml file: %s", path)
-		var tomlConfig tomlConfig
-		if _, err := toml.DecodeFile(path, &tomlConfig); err == nil {
-			return tomlConfig
+		var c tomlConfig
+		if _, err := toml.DecodeFile(path, &c); err == nil {
+			log.Debugf("use toml file: %s", path)
+			config.mergeWith(c)
 		} else {
-			log.Debugf("%s: %s", path, err)
+			log.Debugf("%s", err)
 		}
 	}
-	// return empty config, it's ok
-	return tomlConfig{}
+	return config
+}
+
+func (t *tomlConfig) mergeWith(other tomlConfig) {
+	t.FileFilters = append(t.FileFilters, other.FileFilters...)
+	t.PathFilters = append(t.PathFilters, other.PathFilters...)
+	t.NegFileFilters = append(t.NegFileFilters, other.NegFileFilters...)
+	t.NegPathFilters = append(t.NegPathFilters, other.NegPathFilters...)
 }
 
 type search struct {
