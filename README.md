@@ -1,9 +1,13 @@
 ```
-Yet another file search tool. An equivalent of "find ... | egrep ...". The patterns are defined as lower-case literals and two dots "..", like:
+Yet another file search tool. An equivalent of "find ... | egrep ...". The patterns
+are defined as lower-case literals and two dots "..", like:
 
     ..foo..    is  /.*foo.*/
     bar..      is /bar.*/
     ..foo..bar is /.*foo.*bar/
+
+Supports toml files with configurations, either passed explicitly or in default
+locations: [.bla.toml bla.toml ~/.bla.toml]
 
   -c string
     	Path to toml config file. If empty, default locations are checked.

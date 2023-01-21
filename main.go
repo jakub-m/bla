@@ -15,14 +15,17 @@ import (
 
 var log = betterlog{}
 var tomlPaths = []string{".bla.toml", "bla.toml", "~/.bla.toml"}
-
-const helpString = `
-Yet another file search tool. An equivalent of "find ... | egrep ...". The patterns are defined as lower-case literals and two dots "..", like:
+var helpString = fmt.Sprintf(`
+Yet another file search tool. An equivalent of "find ... | egrep ...". The patterns
+are defined as lower-case literals and two dots "..", like:
 
     ..foo..    is  /.*foo.*/
     bar..      is /bar.*/
     ..foo..bar is /.*foo.*bar/
-`
+
+Supports toml files with configurations, either passed explicitly or in default
+locations: %s
+`, tomlPaths)
 
 type stringArgs []string
 
