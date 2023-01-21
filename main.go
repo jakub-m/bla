@@ -1,8 +1,10 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io/fs"
+	"io/ioutil"
 	"os"
 	"path"
 	"path/filepath"
@@ -12,22 +14,58 @@ import (
 
 var log = betterlog{}
 
+const helpString = `
+Usage:
+
+	bla <paths> \
+		f=<file match pattern> \
+	    p=<path match pattern> \
+		c=<content match pattern>
+
+Where the match pattern is a set of literals separted by two dots "..",
+like: ..foo..bar.. or foo..bar
+
+For files and paths, the pattern matches whole file or path. For content, the
+pattern matches any part of the content (.. are added implicitly at the
+beginning and the end of the pattern.)
+
+Path and filenames are case-insensitive and the patterns must be lower-case.
+Content is case sensitive unless one passes -i flag.
+`
+
 func main() {
-	s, err := newSearchFromArgs(os.Args[1:])
+	var flagDebug bool
+	flag.BoolVar(&flagDebug, "v", false, "verbose debug mode")
+	var flagContentCaseInsensitive bool
+	flag.BoolVar(&flagContentCaseInsensitive, "i", false, "case insensitive content matches (slower)")
+	flag.CommandLine.SetOutput(os.Stdout)
+	flag.Usage = func() {
+		fmt.Println(strings.Trim(helpString, " \n"))
+		fmt.Println()
+		flag.PrintDefaults()
+	}
+	flag.Parse()
+
+	log.Debug = flagDebug
+
+	s, err := newSearchFromArgs(flag.Args())
 	if err != nil {
 		log.Fatalf("Error: %s", err)
 	}
-	log.Debugf("search: %+v", s)
-	onResult := func(r searchResult) {
-		log.Debugf("matched: %s", r)
-		fmt.Println(r)
+	log.Debugf("search: %s", s)
+	onResult := func(path string, info fs.FileInfo) {
+		log.Debugf("matched: %s ,dir=%v", path, info.IsDir())
+		if info.IsDir() {
+			return
+		}
+		fmt.Println(path)
 	}
-	s.execute(onResult)
+	s.execute(onResult, flagContentCaseInsensitive)
 }
 
 type search struct {
-	root                  string
-	contentSearchPatterns []string
+	startPaths            []string
+	contentSearchPatterns []dotSearchPattern
 	fileSearchPatterns    []dotSearchPattern
 	pathSearchPatterns    []dotSearchPattern
 }
@@ -35,12 +73,13 @@ type search struct {
 type searchResult string
 
 const (
-	fileSearchPrefix = "f="
-	pathSearchPrefix = "p="
+	contentSearchPrefix = "c="
+	fileSearchPrefix    = "f="
+	pathSearchPrefix    = "p="
 )
 
 func newSearchFromArgs(args []string) (search, error) {
-	s := search{root: "."} // todo how to set root in cli?
+	s := search{}
 	for _, arg := range args {
 		if strings.HasPrefix(arg, fileSearchPrefix) {
 			pat, err := fileSearchPatternFromArg(arg)
@@ -56,14 +95,19 @@ func newSearchFromArgs(args []string) (search, error) {
 				return s, err
 			}
 			s.pathSearchPatterns = append(s.pathSearchPatterns, pat)
-		} else {
+		} else if strings.HasPrefix(arg, contentSearchPrefix) {
 			// content search pattern
 			pat, err := contentSearchPatternFromArg(arg)
 			if err != nil {
 				return s, err
 			}
 			s.contentSearchPatterns = append(s.contentSearchPatterns, pat)
+		} else {
+			s.startPaths = append(s.startPaths, arg)
 		}
+	}
+	if len(s.startPaths) == 0 {
+		s.startPaths = append(s.startPaths, ".")
 	}
 	return s, nil
 }
@@ -73,7 +117,7 @@ func fileSearchPatternFromArg(arg string) (dotSearchPattern, error) {
 	if trimmed == arg {
 		return dotSearchPattern{}, fmt.Errorf("file prefix missing for %s", arg)
 	}
-	return dotSearchPatternFromString(trimmed)
+	return dotSearchPatternFromString(trimmed, true)
 }
 
 func pathSearchPatternFromArg(arg string) (dotSearchPattern, error) {
@@ -81,46 +125,97 @@ func pathSearchPatternFromArg(arg string) (dotSearchPattern, error) {
 	if trimmed == arg {
 		return dotSearchPattern{}, fmt.Errorf("path prefix missing for %s", arg)
 	}
-	return dotSearchPatternFromString(trimmed)
+	return dotSearchPatternFromString(trimmed, true)
 }
 
-func contentSearchPatternFromArg(arg string) (string, error) {
-	// todo
-	return arg, nil
+func contentSearchPatternFromArg(arg string) (dotSearchPattern, error) {
+	trimmed := strings.TrimPrefix(arg, contentSearchPrefix)
+	if trimmed == arg {
+		return dotSearchPattern{}, fmt.Errorf("content prefix missing for %s", arg)
+	}
+	// for content, we are not interested in full text matches but submatches by default
+	return dotSearchPatternFromString(trimmed, false)
 }
 
-func (s search) execute(onResult func(searchResult)) error {
+func (s search) execute(onResult func(string, fs.FileInfo), contentCaseInsensitive bool) error {
+	visitedPaths := make(map[string]bool)
 	walkFunc := func(path string, info fs.FileInfo, err error) error {
+		if visited := visitedPaths[path]; visited {
+			log.Debugf("walk: already visited: %s", path)
+			return nil
+		}
+		visitedPaths[path] = true
 		log.Debugf("walk: %s", path)
-		if !s.shouldContinueWithPath(path) {
+		if !s.pathMatchesPatterns(path, info, contentCaseInsensitive) {
 			return nil
 		}
 		if err != nil {
 			log.Printf("error for %s: %s", path, err)
 			return nil
 		}
-		onResult(searchResult(path))
+		onResult(path, info)
 		return nil
 	}
-	log.Debugf("walk starting at %s", s.root)
-	return filepath.Walk(s.root, walkFunc)
-}
 
-func (s search) shouldContinueWithPath(path_ string) bool {
-	filename := path.Base(path_)
-	for _, pat := range s.fileSearchPatterns {
-		if !pat.matches(filename) {
-			log.Debugf("skip file %s because does not match %s", filename, pat)
-			return false
+	for _, root := range s.startPaths {
+		log.Debugf("walk starting at: %s", root)
+		if err := filepath.Walk(root, walkFunc); err != nil {
+			return err
 		}
 	}
+	return nil
+}
+
+func (s search) pathMatchesPatterns(path_ string, info fs.FileInfo, contentCaseInsensitive bool) bool {
+	// Adding (?i) to the unrelying regex makes the significantly slower.
+	pathLower := strings.ToLower(path_)
+
+	// path must match all the path search patterns
 	for _, pat := range s.pathSearchPatterns {
-		if !pat.matches(path_) {
+		if !pat.re.MatchString(pathLower) {
 			log.Debugf("skip path %s because does not match %s", path_, pat)
 			return false
 		}
 	}
+
+	// content must match all the content patterns
+	if info.IsDir() {
+		return true
+	}
+
+	filename := path.Base(pathLower)
+	// file name should match all the file search patterns
+	for _, pat := range s.fileSearchPatterns {
+		if !pat.re.MatchString(filename) {
+			log.Debugf("skip file %s because does not match %s", filename, pat)
+			return false
+		}
+	}
+
+	if len(s.contentSearchPatterns) > 0 {
+		// do not open file if no content search patterns
+		contentBytes, err := ioutil.ReadFile(path_)
+		if err != nil {
+			return false
+		}
+		content := string(contentBytes)
+		if contentCaseInsensitive {
+			content = strings.ToLower(content)
+		}
+		for _, pat := range s.contentSearchPatterns {
+			// assume content is utf-8.
+			if !pat.re.MatchString(content) {
+				log.Debugf("skip content of %s because does not match %s", path_, pat)
+				return false
+			}
+		}
+	}
+
 	return true
+}
+
+func (s search) String() string {
+	return fmt.Sprintf("dirs: %+v, files: %+v, paths: %+v, content: %+v", s.startPaths, s.fileSearchPatterns, s.pathSearchPatterns, s.contentSearchPatterns)
 }
 
 type dotSearchPattern struct {
@@ -128,19 +223,18 @@ type dotSearchPattern struct {
 	re       *regexp.Regexp
 }
 
-func dotSearchPatternFromString(s string) (dotSearchPattern, error) {
+func dotSearchPatternFromString(s string, matchWholeContent bool) (dotSearchPattern, error) {
 	parts := strings.Split(s, "..")
 	quoted := []string{}
 	for _, part := range parts {
 		quoted = append(quoted, regexp.QuoteMeta(part))
 	}
-	fullPattern := "^" + strings.Join(quoted, ".*?") + "$"
+	fullPattern := strings.Join(quoted, ".*?")
+	if matchWholeContent {
+		fullPattern = "^" + fullPattern + "$"
+	}
 	re, err := regexp.Compile(fullPattern)
 	return dotSearchPattern{original: s, re: re}, err
-}
-
-func (pat dotSearchPattern) matches(s string) bool {
-	return pat.re.MatchString(s)
 }
 
 func (pat dotSearchPattern) String() string {

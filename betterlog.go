@@ -4,7 +4,9 @@ import (
 	golog "log"
 )
 
-type betterlog struct{}
+type betterlog struct {
+	Debug bool
+}
 
 func (b betterlog) Fatalf(format string, v ...any) {
 	golog.Fatalf(format, v...)
@@ -14,5 +16,7 @@ func (b betterlog) Printf(format string, v ...any) {
 }
 
 func (b betterlog) Debugf(format string, v ...any) {
-	golog.Printf(format, v...)
+	if b.Debug {
+		golog.Printf(format, v...)
+	}
 }
