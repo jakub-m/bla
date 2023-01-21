@@ -17,10 +17,10 @@ var log = betterlog{}
 const helpString = `
 Usage:
 
-	bla <paths> \
-		f=<file match pattern> \
-	    p=<path match pattern> \
-		c=<content match pattern>
+    bla <paths> \
+        f=<file match pattern> \
+        p=<path match pattern> \
+        c=<content match pattern>
 
 Where the match pattern is a set of literals separted by two dots "..",
 like: ..foo..bar.. or foo..bar
