@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"io/fs"
-	"log"
 	"os"
 	"path"
 	"path/filepath"
@@ -11,15 +10,18 @@ import (
 	"strings"
 )
 
+var log = betterlog{}
+
 func main() {
-	s, err := newSearchFromArgs(os.Args)
+	s, err := newSearchFromArgs(os.Args[1:])
 	if err != nil {
 		log.Fatalf("Error: %s", err)
 	}
+	log.Debugf("search: %+v", s)
 	onResult := func(r searchResult) {
-		print(r)
+		log.Debugf("matched: %s", r)
+		fmt.Println(r)
 	}
-
 	s.execute(onResult)
 }
 
@@ -89,6 +91,7 @@ func contentSearchPatternFromArg(arg string) (string, error) {
 
 func (s search) execute(onResult func(searchResult)) error {
 	walkFunc := func(path string, info fs.FileInfo, err error) error {
+		log.Debugf("walk: %s", path)
 		if !s.shouldContinueWithPath(path) {
 			return nil
 		}
@@ -96,7 +99,10 @@ func (s search) execute(onResult func(searchResult)) error {
 			log.Printf("error for %s: %s", path, err)
 			return nil
 		}
+		onResult(searchResult(path))
+		return nil
 	}
+	log.Debugf("walk starting at %s", s.root)
 	return filepath.Walk(s.root, walkFunc)
 }
 
@@ -104,11 +110,13 @@ func (s search) shouldContinueWithPath(path_ string) bool {
 	filename := path.Base(path_)
 	for _, pat := range s.fileSearchPatterns {
 		if !pat.matches(filename) {
+			log.Debugf("skip file %s because does not match %s", filename, pat)
 			return false
 		}
 	}
 	for _, pat := range s.pathSearchPatterns {
 		if !pat.matches(path_) {
+			log.Debugf("skip path %s because does not match %s", path_, pat)
 			return false
 		}
 	}
@@ -126,11 +134,15 @@ func dotSearchPatternFromString(s string) (dotSearchPattern, error) {
 	for _, part := range parts {
 		quoted = append(quoted, regexp.QuoteMeta(part))
 	}
-	fullPattern := "" + strings.Join(quoted, ".*?") + ""
+	fullPattern := "^" + strings.Join(quoted, ".*?") + "$"
 	re, err := regexp.Compile(fullPattern)
 	return dotSearchPattern{original: s, re: re}, err
 }
 
 func (pat dotSearchPattern) matches(s string) bool {
 	return pat.re.MatchString(s)
+}
+
+func (pat dotSearchPattern) String() string {
+	return fmt.Sprintf("%s /%s/", pat.original, pat.re)
 }

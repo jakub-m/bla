@@ -5,7 +5,7 @@ bin = bin/bla
 default: fmt test $(bin)
 
 $(bin): $(gofiles)
-	go build -o $(bin) main.go
+	go build -o $(bin) *.go 
 
 fmt: $(gofiles)
 	go fmt ./...
